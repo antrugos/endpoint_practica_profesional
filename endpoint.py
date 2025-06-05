@@ -57,6 +57,7 @@ def get_openai_response(prompt):
     try:
         response = client.chat.completions.create(
             model="gpt-4o-mini",
+            temperature=0.2,
             messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
