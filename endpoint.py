@@ -16,7 +16,8 @@ MAX_TARGET_LEN = 40
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Ruta del modelo
-MODEL_DIR_T5 = "t5_namuywam"
+# MODEL_DIR_T5 = "t5_namuywam"
+MODEL_DIR_T5 = "t5_namuywam_30k_corpus"
 MODEL_DIR_MBART = "fine_tuned_mbart"
 MODEL_DIR_NLLB = "fine_tuned_nllb"
 
@@ -29,9 +30,9 @@ def load_model(model_path, model_type):
         if model_type == "t5":
             tokenizer = T5Tokenizer.from_pretrained(model_path)
             model = T5ForConditionalGeneration.from_pretrained(model_path)
-        elif model_type in ["mbart", "nllb"]:
-            tokenizer = AutoTokenizer.from_pretrained(model_path)
-            model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
+        # elif model_type in ["mbart", "nllb"]:
+        #     tokenizer = AutoTokenizer.from_pretrained(model_path)
+        #     model = AutoModelForSeq2SeqLM.from_pretrained(model_path)
         else:
             raise ValueError(f"Tipo de modelo no soportado: {model_type}")
         
@@ -45,8 +46,8 @@ def load_model(model_path, model_type):
     
 # Cargar todos los modelos
 models["t5"] = load_model(MODEL_DIR_T5, "t5")
-models["mbart"] = load_model(MODEL_DIR_MBART, "mbart")
-models["nllb"] = load_model(MODEL_DIR_NLLB, "nllb")
+# models["mbart"] = load_model(MODEL_DIR_MBART, "mbart")
+# models["nllb"] = load_model(MODEL_DIR_NLLB, "nllb")
 
 # Configuración de OpenAI
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -57,7 +58,7 @@ def translate_sentence(sentence: str, model_key: str, direction: str) -> str:
     Traduce una oración usando el modelo especificado en la dirección dada.
     Args:
         sentence (str): La oración a traducir.
-        model_key (str): 't5', 'mbart', o 'nllb'.
+        model_key (str): 't5'
         direction (str): 'nmw-es' para Namuy-wam a Español, 'es-nmw' para Español a Namuy-wam.
     """
     tokenizer, model = models.get(model_key, (None, None))
@@ -66,46 +67,54 @@ def translate_sentence(sentence: str, model_key: str, direction: str) -> str:
 
     try:
         if model_key == "t5":
-            input_text = f"translate {direction}: {sentence}"
+            if direction == "es-nmw":
+                input_text = f"translate spanish to namuy: {sentence}"
+            elif direction == "nmw-es":
+                input_text = f"translate namuy to spanish: {sentence}"
+            else:
+                return "❌ Dirección de traducción no válida."
+
             inputs = tokenizer(input_text, return_tensors="pt").to(DEVICE)
+            generate_kwargs = {"max_length": MAX_TARGET_LEN}
+        
         elif model_key == "mbart":
-            # Para mBART, necesitamos configurar src_lang y tgt_lang en el tokenizer
             if direction == "nmw-es":
-                tokenizer.src_lang = "unspecified_UNKNOWN" # O el código ISO real de Namuy-wam
+                tokenizer.src_lang = "unspecified_UNKNOWN"  # Reemplazar si tienes código ISO real
                 tokenizer.tgt_lang = "es_XX"
+                forced_bos = tokenizer.lang_code_to_id.get("es_XX")
             elif direction == "es-nmw":
                 tokenizer.src_lang = "es_XX"
-                tokenizer.tgt_lang = "unspecified_UNKNOWN" # O el código ISO real de Namuy-wam
-            
-            inputs = tokenizer(sentence, return_tensors="pt").to(DEVICE)
-        elif model_key == "nllb":
-            # Para NLLB, se especifica src_lang y tgt_lang directamente en la llamada a tokenizer
-            src_lang_nllb = "nmw_Latn" if direction == "nmw-es" else "spa_Latn"
-            tgt_lang_nllb = "spa_Latn" if direction == "nmw-es" else "nmw_Latn"
-            
-            inputs = tokenizer(sentence, return_tensors="pt", src_lang=src_lang_nllb).to(DEVICE)
-        
-        # Generación común para todos los modelos Seq2Seq
-        # Para NLLB, forced_bos_token_id asegura que el primer token del decoder sea el token de destino
-        # Esto es crucial para la traducción multilingüe con NLLB
-        generate_kwargs = {"max_length": MAX_TARGET_LEN}
-        if model_key == "nllb":
-            if direction == "nmw-es":
-                generate_kwargs["forced_bos_token_id"] = tokenizer.lang_code_to_id["spa_Latn"]
-            elif direction == "es-nmw":
-                generate_kwargs["forced_bos_token_id"] = tokenizer.lang_code_to_id["nmw_Latn"] # Asumiendo que 'nmw_Latn' se añadió/se mapeó
-        
-        # También para mBART, aunque `tgt_lang` en tokenizer ya lo maneja
-        elif model_key == "mbart":
-            if direction == "nmw-es":
-                generate_kwargs["forced_bos_token_id"] = tokenizer.lang_code_to_id["es_XX"]
-            elif direction == "es-nmw":
-                generate_kwargs["forced_bos_token_id"] = tokenizer.lang_code_to_id["unspecified_UNKNOWN"] # Asegúrate de que este token exista si lo usas
+                tokenizer.tgt_lang = "unspecified_UNKNOWN"
+                forced_bos = tokenizer.lang_code_to_id.get("unspecified_UNKNOWN")
+            else:
+                return "❌ Dirección de traducción no válida."
 
+            inputs = tokenizer(sentence, return_tensors="pt").to(DEVICE)
+            generate_kwargs = {"max_length": MAX_TARGET_LEN, "forced_bos_token_id": forced_bos}
+
+        elif model_key == "nllb":
+            if direction == "nmw-es":
+                src_lang_nllb = "nmw_Latn"
+                tgt_lang_nllb = "spa_Latn"
+            elif direction == "es-nmw":
+                src_lang_nllb = "spa_Latn"
+                tgt_lang_nllb = "nmw_Latn"
+            else:
+                return "❌ Dirección de traducción no válida."
+
+            forced_bos = tokenizer.lang_code_to_id.get(tgt_lang_nllb)
+            inputs = tokenizer(sentence, return_tensors="pt", src_lang=src_lang_nllb).to(DEVICE)
+            generate_kwargs = {"max_length": MAX_TARGET_LEN, "forced_bos_token_id": forced_bos}
+
+        else:
+            return f"❌ Modelo '{model_key}' no soportado."
+
+        print(f"✅ Modelo seleccionado: {model_key.upper()} - Dirección: {direction}")
         output = model.generate(**inputs, **generate_kwargs)
         return tokenizer.decode(output[0], skip_special_tokens=True)
+
     except Exception as e:
-        print(f"Error durante la traducción con {model_key} ({direction}): {e}")
+        print(f"❌ Error durante la traducción con {model_key} ({direction}): {e}")
         return "Error en la traducción"
 
 def get_openai_response(prompt: str) -> dict:
@@ -189,8 +198,15 @@ def webhook():
             if gpt_parsed_response.get("action") == "translate":
                 text_to_translate = gpt_parsed_response["text"]
                 direction_to_translate = gpt_parsed_response["direction"]
-                translated_text = translate_sentence(text_to_translate, "mbart", direction_to_translate)
-                final_response = f"Traducción de '{text_to_translate}' ({direction_to_translate}): {translated_text}"
+                # Buscar un modelo disponible (prioridad: t5, mbart, nllb)
+                available_models = [key for key in ["t5", "mbart", "nllb"] if key in models and all(models[key])]
+                model_key = available_models[0] if available_models else None
+
+                if model_key:
+                    translated_text = translate_sentence(text_to_translate, model_key, direction_to_translate)
+                    final_response = f"Traducción de '{text_to_translate}' ({direction_to_translate}): {translated_text}"
+                else:
+                    final_response = "No hay modelos disponibles para traducir en este momento."
 
             elif gpt_parsed_response.get("action") == "chat":
                 final_response = gpt_parsed_response["response"]
